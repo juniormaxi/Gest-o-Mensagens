@@ -1,0 +1,3 @@
+const TOKEN_KEY='whatssender_session';
+export const session={get:()=>localStorage.getItem(TOKEN_KEY),set:(token:string)=>localStorage.setItem(TOKEN_KEY,token),clear:()=>localStorage.removeItem(TOKEN_KEY)};
+export async function api<T>(path:string,options:RequestInit={}):Promise<T>{const response=await fetch(`/api${path}`,{...options,headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(session.get()?{Authorization:`Bearer ${session.get()}`}:{ }),...options.headers}});const data=response.status===204?null:await response.json();if(!response.ok)throw new Error(data?.error??'Falha na comunicação');return data as T;}

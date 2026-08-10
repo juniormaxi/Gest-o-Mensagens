@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  FINISHED
+  ARCHIVED
+}
+
+enum CampaignContactStatus {
+  PENDING
+  SENT
+  NOT_SENT
+  NO_WHATSAPP
+  ERROR
+  SKIPPED
+}
+
+enum WhatsAppStatus {
+  UNVERIFIED
+  CONFIRMED
+  NO_WHATSAPP
+  ERROR
+}
+
+enum ImportStatus {
+  PREVIEW
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum MessageEventType {
+  OPENED_WHATSAPP
+  SENT
+  NOT_SENT
+  NO_WHATSAPP
+  ERROR
+  SKIPPED
+}
+
+model User {
+  id           String            @id @default(cuid())
+  name         String
+  email        String            @unique
+  passwordHash String            @map("password_hash")
+  role         UserRole          @default(OPERATOR)
+  active       Boolean           @default(true)
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+  campaigns    Campaign[]        @relation("CampaignOwner")
+  sentContacts CampaignContact[] @relation("SentBy")
+  events       MessageEvent[]
+  audits       AuditLog[]
+
+  @@map("users")
+}
+
+model Campaign {
+  id              String            @id @default(cuid())
+  name            String
+  description     String?
+  defaultUrl      String?           @map("default_url")
+  messageTemplate String?           @map("message_template") @db.Text
+  attachmentName  String?           @map("attachment_name")
+  attachmentMime  String?           @map("attachment_mime")
+  attachmentData  Bytes?            @map("attachment_data")
+  status          CampaignStatus    @default(DRAFT)
+  ownerId         String            @map("owner_id")
+  owner           User              @relation("CampaignOwner", fields: [ownerId], references: [id])
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  contacts        CampaignContact[]
+  imports         Import[]
+  events          MessageEvent[]
+
+  @@index([status, createdAt])
+  @@index([ownerId])
+  @@map("campaigns")
+}
+
+model Contact {
+  id             String            @id @default(cuid())
+  name           String?
+  phone          String            @unique
+  email          String?
+  city           String?
+  state          String?
+  cpf            String?
+  notes          String?           @db.Text
+  customFields   Json              @default("{}") @map("custom_fields")
+  whatsappStatus WhatsAppStatus    @default(UNVERIFIED) @map("whatsapp_status")
+  anonymizedAt   DateTime?         @map("anonymized_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  campaigns      CampaignContact[]
+  events         MessageEvent[]
+  imports        ContactImport[]
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("contacts")
+}
+
+model CampaignContact {
+  id               String                @id @default(cuid())
+  campaignId       String                @map("campaign_id")
+  contactId        String                @map("contact_id")
+  customFields     Json                  @default("{}") @map("custom_fields")
+  generatedMessage String?               @map("generated_message") @db.Text
+  generatedUrl     String?               @map("generated_url")
+  status           CampaignContactStatus @default(PENDING)
+  sentAt           DateTime?             @map("sent_at")
+  sentById         String?               @map("sent_by")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  campaign         Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact          Contact               @relation(fields: [contactId], references: [id])
+  sentBy           User?                 @relation("SentBy", fields: [sentById], references: [id])
+  events           MessageEvent[]
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status, createdAt])
+  @@index([contactId])
+  @@map("campaign_contacts")
+}
+
+model Import {
+  id          String          @id @default(cuid())
+  campaignId  String          @map("campaign_id")
+  fileName    String          @map("file_name")
+  status      ImportStatus    @default(PREVIEW)
+  mapping     Json            @default("{}")
+  summary     Json            @default("{}")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  completedAt DateTime?       @map("completed_at")
+  campaign    Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  rows        ImportRow[]
+  contacts    ContactImport[]
+
+  @@index([campaignId, createdAt])
+  @@map("imports")
+}
+
+model ContactImport {
+  id        String   @id @default(cuid())
+  contactId String   @map("contact_id")
+  importId  String   @map("import_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  import    Import   @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, importId])
+  @@index([importId])
+  @@index([contactId])
+  @@map("contact_imports")
+}
+
+model ImportRow {
+  id             String  @id @default(cuid())
+  importId       String  @map("import_id")
+  rowNumber      Int     @map("row_number")
+  rawData        Json    @map("raw_data")
+  normalizedData Json?   @map("normalized_data")
+  errors         Json    @default("[]")
+  imported       Boolean @default(false)
+  import         Import  @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([importId, imported])
+  @@map("import_rows")
+}
+
+model MessageTemplate {
+  id             String   @id @default(cuid())
+  name           String
+  category       String?
+  message        String   @db.Text
+  variables      Json     @default("[]")
+  defaultUrl     String?  @map("default_url")
+  attachmentName String?  @map("attachment_name")
+  attachmentMime String?  @map("attachment_mime")
+  attachmentData Bytes?   @map("attachment_data")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("message_templates")
+}
+
+model MessageEvent {
+  id                String           @id @default(cuid())
+  campaignId        String           @map("campaign_id")
+  contactId         String           @map("contact_id")
+  campaignContactId String           @map("campaign_contact_id")
+  userId            String           @map("user_id")
+  eventType         MessageEventType @map("event_type")
+  message           String?          @db.Text
+  url               String?
+  createdAt         DateTime         @default(now()) @map("created_at")
+  campaign          Campaign         @relation(fields: [campaignId], references: [id])
+  contact           Contact          @relation(fields: [contactId], references: [id])
+  campaignContact   CampaignContact  @relation(fields: [campaignContactId], references: [id], onDelete: Cascade)
+  user              User             @relation(fields: [userId], references: [id])
+
+  @@index([campaignId, createdAt])
+  @@index([contactId, createdAt])
+  @@index([userId, createdAt])
+  @@map("message_events")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  action    String
+  entity    String?
+  entityId  String?  @map("entity_id")
+  ip        String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
