@@ -78,6 +78,10 @@ model Campaign {
   attachmentName  String?           @map("attachment_name")
   attachmentMime  String?           @map("attachment_mime")
   attachmentData  Bytes?            @map("attachment_data")
+  queueActive     Boolean           @default(false) @map("queue_active")
+  queueMinSeconds Int               @default(0) @map("queue_min_seconds")
+  queueMaxSeconds Int               @default(0) @map("queue_max_seconds")
+  queueStartedAt  DateTime?         @map("queue_started_at")
   status          CampaignStatus    @default(DRAFT)
   ownerId         String            @map("owner_id")
   owner           User              @relation("CampaignOwner", fields: [ownerId], references: [id])
@@ -88,6 +92,7 @@ model Campaign {
   events          MessageEvent[]
 
   @@index([status, createdAt])
+  @@index([queueActive, queueStartedAt])
   @@index([ownerId])
   @@map("campaigns")
 }

@@ -1167,6 +1167,10 @@ kbd {
 .selection-summary { display: flex; align-items: center; gap: 8px; padding: 12px; background: #edf8f3; color: #147a55; border-radius: 9px; }
 .safety-note { text-align: center; color: #52615a; }
 .safety-note svg { color: #147a55; }
+.active-queues { margin-top: 18px; }
+.active-queue-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid #e7ece9; }
+.active-queue-row > div { display: flex; flex-direction: column; gap: 4px; }
+.active-queue-row span { color: #748079; font-size: 12px; }
 .cooldown-bar { display: flex; align-items: center; gap: 12px; margin: 14px 0; padding: 14px 16px; background: #fff8df; border: 1px solid #f0d982; border-radius: 10px; color: #735d14; }
 .cooldown-bar > div { display: flex; flex: 1; flex-direction: column; }
 .cooldown-bar button { white-space: nowrap; }
@@ -1197,6 +1201,7 @@ kbd {
 }
 @media (max-width: 760px) {
   .send-setup-grid { grid-template-columns: 1fr; }
+  .active-queue-row { align-items: stretch; flex-direction: column; }
   .cooldown-bar { align-items: stretch; flex-direction: column; }
   .model-grid,
   .form-grid {

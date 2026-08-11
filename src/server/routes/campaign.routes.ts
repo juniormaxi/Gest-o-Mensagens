@@ -74,6 +74,34 @@ campaignRoutes.post("/", async (req, res) => {
   });
   res.status(201).json(item);
 });
+campaignRoutes.get("/queues/active", async (_req, res) => {
+  const items = await prisma.campaign.findMany({
+    where: { queueActive: true },
+    orderBy: { queueStartedAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      queueMinSeconds: true,
+      queueMaxSeconds: true,
+      queueStartedAt: true,
+      _count: {
+        select: {
+          contacts: true,
+        },
+      },
+      contacts: {
+        where: { status: "PENDING" },
+        select: { id: true },
+      },
+    },
+  });
+  res.json({
+    items: items.map(({ contacts, ...item }) => ({
+      ...item,
+      pending: contacts.length,
+    })),
+  });
+});
 campaignRoutes.get("/:id", async (req, res) => {
   const item = await prisma.campaign.findUnique({
     where: { id: req.params.id },
@@ -112,7 +140,13 @@ campaignRoutes.patch("/:id", async (req, res) => {
   res.json(item);
 });
 campaignRoutes.post("/:id/apply-template", async (req, res) => {
-  const input = z.object({ templateId: z.string().min(1) }).parse(req.body);
+  const input = z.object({
+    templateId: z.string().min(1),
+    minSeconds: z.number().int().min(0).max(3600),
+    maxSeconds: z.number().int().min(0).max(3600),
+  }).refine((value) => value.maxSeconds >= value.minSeconds, {
+    message: "O intervalo máximo deve ser maior ou igual ao mínimo",
+  }).parse(req.body);
   const [campaign, template] = await Promise.all([
     prisma.campaign.findUnique({ where: { id: req.params.id }, select: { id: true } }),
     prisma.messageTemplate.findUnique({ where: { id: input.templateId } }),
@@ -127,6 +161,10 @@ campaignRoutes.post("/:id/apply-template", async (req, res) => {
       attachmentName: template.attachmentName,
       attachmentMime: template.attachmentMime,
       attachmentData: template.attachmentData,
+      queueActive: true,
+      queueMinSeconds: input.minSeconds,
+      queueMaxSeconds: input.maxSeconds,
+      queueStartedAt: new Date(),
     },
     omit: { attachmentData: true },
   });
@@ -139,6 +177,20 @@ campaignRoutes.post("/:id/apply-template", async (req, res) => {
     metadata: { templateId: template.id },
   });
   res.json(item);
+});
+campaignRoutes.post("/:id/queue/end", async (req, res) => {
+  await prisma.campaign.update({
+    where: { id: req.params.id },
+    data: { queueActive: false },
+  });
+  await audit({
+    userId: req.user!.id,
+    action: "END_CAMPAIGN_QUEUE",
+    entity: "Campaign",
+    entityId: req.params.id,
+    ip: req.ip,
+  });
+  res.status(204).end();
 });
 campaignRoutes.delete("/:id", async (req, res) => {
   const id = z.string().min(1).parse(req.params.id);

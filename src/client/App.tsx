@@ -48,6 +48,9 @@ type Campaign = {
   createdAt: string;
   _count?: { contacts: number };
   counts?: Record<string, number>;
+  queueActive?: boolean;
+  queueMinSeconds?: number;
+  queueMaxSeconds?: number;
 };
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -1847,6 +1850,15 @@ type QueueItem = {
   whatsappUrl?: string;
 };
 type SendConfig = { minSeconds: number; maxSeconds: number };
+type ActiveQueue = {
+  id: string;
+  name: string;
+  queueMinSeconds: number;
+  queueMaxSeconds: number;
+  queueStartedAt: string;
+  pending: number;
+  _count: { contacts: number };
+};
 function SendSetup() {
   const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -1855,13 +1867,16 @@ function SendSetup() {
   const [templateId, setTemplateId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeQueues, setActiveQueues] = useState<ActiveQueue[]>([]);
   useEffect(() => {
     Promise.all([
       api<{ items: Campaign[] }>("/campaigns?pageSize=100"),
       api<{ items: MessageModel[] }>("/templates?pageSize=100"),
-    ]).then(([campaignResult, templateResult]) => {
+      api<{ items: ActiveQueue[] }>("/campaigns/queues/active"),
+    ]).then(([campaignResult, templateResult, queueResult]) => {
       setCampaigns(campaignResult.items);
       setTemplates(templateResult.items);
+      setActiveQueues(queueResult.items);
     });
   }, []);
   async function start(event: FormEvent<HTMLFormElement>) {
@@ -1878,7 +1893,7 @@ function SendSetup() {
     try {
       await api(`/campaigns/${campaignId}/apply-template`, {
         method: "POST",
-        body: JSON.stringify({ templateId }),
+        body: JSON.stringify({ templateId, minSeconds, maxSeconds }),
       });
       localStorage.setItem(
         `send-config:${campaignId}`,
@@ -1891,7 +1906,7 @@ function SendSetup() {
     }
   }
   const selected = campaigns.find((item) => item.id === campaignId);
-  const hasActiveQueue = campaignId && localStorage.getItem(`send-config:${campaignId}`);
+  const hasActiveQueue = activeQueues.some((item) => item.id === campaignId);
   return (
     <Page title="Envios assistidos" subtitle="Prepare a lista, o modelo e o ritmo de atendimento">
       <div className="send-setup-grid">
@@ -1922,6 +1937,15 @@ function SendSetup() {
         </form>
         <section className="panel safety-note"><ShieldCheck size={28}/><h3>Operação assistida</h3><p>Cada conversa é aberta individualmente. O operador revisa a mensagem, envia no WhatsApp e confirma o resultado antes de seguir.</p></section>
       </div>
+      <section className="panel active-queues">
+        <div className="panel-title"><h3>Filas em andamento</h3><span>{activeQueues.length} ativa(s)</span></div>
+        {activeQueues.length ? activeQueues.map((item) => (
+          <div className="active-queue-row" key={item.id}>
+            <div><strong>{item.name}</strong><span>{item.pending} pendentes de {item._count.contacts} contatos · intervalo de {item.queueMinSeconds}s a {item.queueMaxSeconds}s</span></div>
+            <button className="secondary inline" onClick={() => navigate(`/campanhas/${item.id}/fila`)}><Play size={16}/> Continuar envio</button>
+          </div>
+        )) : <Empty text="Nenhuma fila em andamento" />}
+      </section>
     </Page>
   );
 }
@@ -1935,18 +1959,20 @@ function Queue() {
   const [paused, setPaused] = useState(false);
   const [nextIndex, setNextIndex] = useState<number>();
   const [pendingRemoval, setPendingRemoval] = useState<QueueItem>();
-  const config: SendConfig = (() => {
+  const [config, setConfig] = useState<SendConfig>(() => {
     try { return JSON.parse(localStorage.getItem(`send-config:${id}`) || ""); }
     catch { return { minSeconds: 0, maxSeconds: 0 }; }
-  })();
-  const load = () =>
-    api<{ items: QueueItem[]; total: number }>(
-      `/campaigns/${id}/queue?pageSize=200`,
-    ).then((x) => {
-      setItems(x.items);
-      const firstPending = x.items.findIndex((item) => item.status === "PENDING");
-      setIndex(firstPending >= 0 ? firstPending : Math.max(0, x.items.length - 1));
-    });
+  });
+  const load = async () => {
+    const [queue, campaign] = await Promise.all([
+      api<{ items: QueueItem[]; total: number }>(`/campaigns/${id}/queue?pageSize=200`),
+      api<Campaign>(`/campaigns/${id}`),
+    ]);
+    setItems(queue.items);
+    const firstPending = queue.items.findIndex((item) => item.status === "PENDING");
+    setIndex(firstPending >= 0 ? firstPending : Math.max(0, queue.items.length - 1));
+    setConfig({ minSeconds: campaign.queueMinSeconds ?? 0, maxSeconds: campaign.queueMaxSeconds ?? 0 });
+  };
   useEffect(() => {
     void load();
   }, [id]);
@@ -1998,9 +2024,15 @@ function Queue() {
     setPendingRemoval(undefined);
     setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
   }
-  function finishQueue() {
+  async function finishQueue() {
+    await api(`/campaigns/${id}/queue/end`, { method: "POST" });
     localStorage.removeItem(`send-config:${id}`);
     navigate("/envios");
+  }
+  async function next() {
+    if (!detail || nextIndex !== undefined) return;
+    if (detail.status === "PENDING") await event("SENT");
+    else setIndex((value) => Math.min(value + 1, items.length - 1));
   }
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -2015,8 +2047,7 @@ function Queue() {
       if (e.key.toLowerCase() === "e") event("SENT");
       if (e.key.toLowerCase() === "n") event("NOT_SENT");
       if (e.key.toLowerCase() === "s") event("NO_WHATSAPP");
-      if (e.key === "ArrowRight")
-        setIndex((i) => Math.min(i + 1, items.length - 1));
+      if (e.key === "ArrowRight") void next();
       if (e.key === "ArrowLeft") setIndex((i) => Math.max(i - 1, 0));
     };
     window.addEventListener("keydown", key);
@@ -2107,10 +2138,7 @@ function Queue() {
             <ChevronLeft />
             Anterior
           </button>
-          <button
-            disabled={index === items.length - 1}
-            onClick={() => setIndex(index + 1)}
-          >
+          <button disabled={nextIndex !== undefined || (index === items.length - 1 && detail.status !== "PENDING")} onClick={next}>
             Próximo
             <ChevronRight />
           </button>
