@@ -773,6 +773,11 @@ td:first-child span {
   color: #a62f2f;
   background: #fff4f4;
 }
+.result button.blacklist-button {
+  border-color: #c8b6e8;
+  color: #65449a;
+  background: #f8f4ff;
+}
 .queue-nav {
   display: flex;
   justify-content: space-between;

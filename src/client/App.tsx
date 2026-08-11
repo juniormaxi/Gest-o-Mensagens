@@ -1959,6 +1959,7 @@ function Queue() {
   const [paused, setPaused] = useState(false);
   const [nextIndex, setNextIndex] = useState<number>();
   const [pendingRemoval, setPendingRemoval] = useState<QueueItem>();
+  const [pendingBlock, setPendingBlock] = useState<QueueItem>();
   const [config, setConfig] = useState<SendConfig>(() => {
     try { return JSON.parse(localStorage.getItem(`send-config:${id}`) || ""); }
     catch { return { minSeconds: 0, maxSeconds: 0 }; }
@@ -1993,18 +1994,28 @@ function Queue() {
     setNextIndex(undefined);
     setPaused(false);
   }, [remaining, nextIndex]);
-  async function event(type: string) {
+  async function event(type: string, immediate = false) {
     if (!detail) return;
     await api(`/campaigns/${id}/queue/${detail.id}/events`, {
       method: "POST",
       body: JSON.stringify({ eventType: type }),
     });
     if (type !== "OPENED_WHATSAPP") {
+      if (type === "NO_WHATSAPP") {
+        const remainingItems = items.filter((item) => item.id !== detail.id);
+        setItems(remainingItems);
+        setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
+        return;
+      }
       setItems((old) =>
         old.map((x, i) => (i === index ? { ...x, status: type } : x)),
       );
       const target = Math.min(index + 1, items.length - 1);
       if (target !== index) {
+        if (immediate) {
+          setIndex(target);
+          return;
+        }
         const wait = Math.floor(Math.random() * (config.maxSeconds - config.minSeconds + 1)) + config.minSeconds;
         setRemaining(wait);
         setNextIndex(target);
@@ -2013,8 +2024,17 @@ function Queue() {
   }
   async function open() {
     if (!detail) return;
-    await event("OPENED_WHATSAPP");
     window.open(detail.whatsappUrl, "_blank", "noopener,noreferrer");
+    await event("OPENED_WHATSAPP");
+    await event("SENT", true);
+  }
+  async function blockContact() {
+    if (!pendingBlock) return;
+    await api(`/campaigns/${id}/queue/${pendingBlock.id}/block`, { method: "POST" });
+    const remainingItems = items.filter((item) => item.id !== pendingBlock.id);
+    setItems(remainingItems);
+    setPendingBlock(undefined);
+    setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
   }
   async function removeFromQueue() {
     if (!pendingRemoval) return;
@@ -2131,6 +2151,9 @@ function Queue() {
             <button className="danger-button" disabled={nextIndex !== undefined} onClick={() => setPendingRemoval(detail)}>
               <Trash2 size={16}/> Remover da lista
             </button>
+            <button className="blacklist-button" disabled={nextIndex !== undefined} onClick={() => setPendingBlock(detail)}>
+              <ShieldCheck size={16}/> Não enviar mensagens
+            </button>
           </div>
         </div>
         <div className="queue-nav">
@@ -2145,6 +2168,7 @@ function Queue() {
         </div>
       </section>
       {pendingRemoval && <ConfirmDialog title="Remover contato desta lista?" description={`${pendingRemoval.contact.name || pendingRemoval.contact.phone} será removido somente desta campanha. O cadastro geral será preservado.`} confirmLabel="Remover da lista" close={() => setPendingRemoval(undefined)} onConfirm={removeFromQueue} />}
+      {pendingBlock && <ConfirmDialog title="Adicionar número à blacklist?" description={`${pendingBlock.contact.name || pendingBlock.contact.phone} não aparecerá mais em nenhuma fila de envio.`} confirmLabel="Não enviar mensagens" close={() => setPendingBlock(undefined)} onConfirm={blockContact} />}
     </Page>
   );
 }

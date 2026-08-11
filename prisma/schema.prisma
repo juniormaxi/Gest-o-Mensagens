@@ -108,6 +108,8 @@ model Contact {
   notes          String?           @db.Text
   customFields   Json              @default("{}") @map("custom_fields")
   whatsappStatus WhatsAppStatus    @default(UNVERIFIED) @map("whatsapp_status")
+  doNotMessage   Boolean           @default(false) @map("do_not_message")
+  blockedAt      DateTime?         @map("blocked_at")
   anonymizedAt   DateTime?         @map("anonymized_at")
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
@@ -117,6 +119,7 @@ model Contact {
 
   @@index([name])
   @@index([createdAt])
+  @@index([doNotMessage, whatsappStatus])
   @@map("contacts")
 }
 

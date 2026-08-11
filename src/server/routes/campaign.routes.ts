@@ -90,7 +90,10 @@ campaignRoutes.get("/queues/active", async (_req, res) => {
         },
       },
       contacts: {
-        where: { status: "PENDING" },
+        where: {
+          status: "PENDING",
+          contact: { doNotMessage: false, whatsappStatus: { not: "NO_WHATSAPP" } },
+        },
         select: { id: true },
       },
     },
@@ -274,19 +277,19 @@ campaignRoutes.get("/:id/queue", async (req, res) => {
     .parse(req.query);
   const where = {
     campaignId: req.params.id,
-    ...(query.status ? { status: query.status } : {}),
-    ...(query.search
-      ? {
-          contact: {
+    contact: {
+      doNotMessage: false,
+      whatsappStatus: { not: "NO_WHATSAPP" as const },
+      ...(query.search
+        ? {
             OR: [
-              {
-                name: { contains: query.search, mode: "insensitive" as const },
-              },
+              { name: { contains: query.search, mode: "insensitive" as const } },
               { phone: { contains: query.search } },
             ],
-          },
-        }
-      : {}),
+          }
+        : {}),
+    },
+    ...(query.status ? { status: query.status } : {}),
   };
   const [items, total] = await prisma.$transaction([
     prisma.campaignContact.findMany({
@@ -382,6 +385,11 @@ campaignRoutes.post(
             sentById: status === "SENT" ? req.user!.id : current.sentById,
           },
         });
+      if (input.eventType === "NO_WHATSAPP")
+        await tx.contact.update({
+          where: { id: current.contactId },
+          data: { whatsappStatus: "NO_WHATSAPP" },
+        });
       return event;
     });
     await audit({
@@ -397,6 +405,48 @@ campaignRoutes.post(
     res.status(201).json(result);
   },
 );
+campaignRoutes.post("/:id/queue/:campaignContactId/block", async (req, res) => {
+  const current = await prisma.campaignContact.findFirst({
+    where: { id: req.params.campaignContactId, campaignId: req.params.id },
+    include: { campaign: true, contact: true },
+  });
+  if (!current) throw new AppError(404, "Contato da campanha não encontrado");
+  const data = resolveContactData(
+    current.contact as unknown as Record<string, unknown>,
+    current.customFields as Record<string, unknown>,
+    current.campaign.defaultUrl,
+  );
+  const message = renderCampaignMessage(current.campaign.messageTemplate ?? "", data);
+  await prisma.$transaction([
+    prisma.contact.update({
+      where: { id: current.contactId },
+      data: { doNotMessage: true, blockedAt: new Date() },
+    }),
+    prisma.campaignContact.update({
+      where: { id: current.id },
+      data: { status: "SKIPPED", generatedMessage: message },
+    }),
+    prisma.messageEvent.create({
+      data: {
+        campaignId: current.campaignId,
+        contactId: current.contactId,
+        campaignContactId: current.id,
+        userId: req.user!.id,
+        eventType: "SKIPPED",
+        message,
+      },
+    }),
+  ]);
+  await audit({
+    userId: req.user!.id,
+    action: "ADD_CONTACT_TO_BLACKLIST",
+    entity: "Contact",
+    entityId: current.contactId,
+    ip: req.ip,
+    metadata: { campaignId: current.campaignId },
+  });
+  res.status(204).end();
+});
 campaignRoutes.delete("/:id/queue/:campaignContactId", async (req, res) => {
   const current = await prisma.campaignContact.findFirst({
     where: { id: req.params.campaignContactId, campaignId: req.params.id },
