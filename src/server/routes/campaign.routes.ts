@@ -9,7 +9,7 @@ import { prisma } from "../lib/prisma.js";
 import { authenticate } from "../middleware/auth.js";
 import { AppError } from "../lib/errors.js";
 import { audit } from "../services/audit.service.js";
-import { renderTemplate, resolveContactData } from "../../shared/template.js";
+import { renderCampaignMessage, resolveContactData } from "../../shared/template.js";
 import { WhatsAppWebProvider } from "../providers/whatsapp-web.provider.js";
 export const campaignRoutes = Router();
 campaignRoutes.use(authenticate);
@@ -262,7 +262,7 @@ campaignRoutes.get("/:id/queue/:campaignContactId", async (req, res) => {
     item.customFields as Record<string, unknown>,
     item.campaign.defaultUrl,
   );
-  const message = renderTemplate(item.campaign.messageTemplate ?? "", data);
+  const message = renderCampaignMessage(item.campaign.messageTemplate ?? "", data);
   const url = String(data.url ?? "");
   const whatsappUrl = new WhatsAppWebProvider().openConversation(
     item.contact.phone,
@@ -301,7 +301,7 @@ campaignRoutes.post(
       current.customFields as Record<string, unknown>,
       current.campaign.defaultUrl,
     );
-    const message = renderTemplate(
+    const message = renderCampaignMessage(
       current.campaign.messageTemplate ?? "",
       data,
     );
@@ -345,3 +345,20 @@ campaignRoutes.post(
     res.status(201).json(result);
   },
 );
+campaignRoutes.delete("/:id/queue/:campaignContactId", async (req, res) => {
+  const current = await prisma.campaignContact.findFirst({
+    where: { id: req.params.campaignContactId, campaignId: req.params.id },
+    select: { id: true, contactId: true },
+  });
+  if (!current) throw new AppError(404, "Contato da campanha não encontrado");
+  await prisma.campaignContact.delete({ where: { id: current.id } });
+  await audit({
+    userId: req.user!.id,
+    action: "REMOVE_CONTACT_FROM_CAMPAIGN_QUEUE",
+    entity: "CampaignContact",
+    entityId: current.id,
+    ip: req.ip,
+    metadata: { campaignId: req.params.id, contactId: current.contactId },
+  });
+  res.status(204).end();
+});

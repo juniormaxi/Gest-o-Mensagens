@@ -23,6 +23,16 @@ export function renderTemplate(
   );
 }
 
+export function renderCampaignMessage(
+  template: string,
+  data: Record<string, unknown>,
+): string {
+  const message = renderTemplate(template, data).trim();
+  const url = String(data.url ?? "").trim();
+  if (!url || message.includes(url)) return message;
+  return [message, url].filter(Boolean).join("\n\n");
+}
+
 export function resolveContactData(
   contact: Record<string, unknown>,
   campaignFields: Record<string, unknown>,

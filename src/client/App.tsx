@@ -1842,7 +1842,7 @@ function ImportWizard({
 type QueueItem = {
   id: string;
   status: string;
-  contact: { name?: string; phone: string; city?: string };
+  contact: { id: string; name?: string; phone: string; city?: string };
   generatedMessage?: string;
   whatsappUrl?: string;
 };
@@ -1880,17 +1880,18 @@ function SendSetup() {
         method: "POST",
         body: JSON.stringify({ templateId }),
       });
-      sessionStorage.setItem(
+      localStorage.setItem(
         `send-config:${campaignId}`,
         JSON.stringify({ minSeconds, maxSeconds }),
       );
-      navigate(`/campanhas/${campaignId}/fila?status=PENDING`);
+      navigate(`/campanhas/${campaignId}/fila`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Não foi possível iniciar a fila");
       setBusy(false);
     }
   }
   const selected = campaigns.find((item) => item.id === campaignId);
+  const hasActiveQueue = campaignId && localStorage.getItem(`send-config:${campaignId}`);
   return (
     <Page title="Envios assistidos" subtitle="Prepare a lista, o modelo e o ritmo de atendimento">
       <div className="send-setup-grid">
@@ -1903,6 +1904,7 @@ function SendSetup() {
             </select>
           </label>
           {selected && <div className="selection-summary"><Users size={18}/><span><strong>{selected._count?.contacts ?? 0}</strong> contatos na lista da campanha</span></div>}
+          {hasActiveQueue && <button type="button" className="secondary inline" onClick={() => navigate(`/campanhas/${campaignId}/fila`)}><Play size={17}/> Retomar fila ativa</button>}
           <div className="setup-step"><span>2</span><div><strong>Modelo de mensagem</strong><small>O conteúdo e o anexo do modelo serão aplicados à campanha.</small></div></div>
           <label>Modelo
             <select required value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
@@ -1932,14 +1934,19 @@ function Queue() {
   const [remaining, setRemaining] = useState(0);
   const [paused, setPaused] = useState(false);
   const [nextIndex, setNextIndex] = useState<number>();
+  const [pendingRemoval, setPendingRemoval] = useState<QueueItem>();
   const config: SendConfig = (() => {
-    try { return JSON.parse(sessionStorage.getItem(`send-config:${id}`) || ""); }
+    try { return JSON.parse(localStorage.getItem(`send-config:${id}`) || ""); }
     catch { return { minSeconds: 0, maxSeconds: 0 }; }
   })();
   const load = () =>
     api<{ items: QueueItem[]; total: number }>(
-      `/campaigns/${id}/queue?pageSize=200${new URLSearchParams(location.search).get("status") ? `&status=${new URLSearchParams(location.search).get("status")}` : ""}`,
-    ).then((x) => setItems(x.items));
+      `/campaigns/${id}/queue?pageSize=200`,
+    ).then((x) => {
+      setItems(x.items);
+      const firstPending = x.items.findIndex((item) => item.status === "PENDING");
+      setIndex(firstPending >= 0 ? firstPending : Math.max(0, x.items.length - 1));
+    });
   useEffect(() => {
     void load();
   }, [id]);
@@ -1947,6 +1954,7 @@ function Queue() {
     const item = items[index];
     if (item)
       api<QueueItem>(`/campaigns/${id}/queue/${item.id}`).then(setDetail);
+    else setDetail(undefined);
   }, [items, index, id]);
   useEffect(() => {
     if (!nextIndex || paused || remaining <= 0) return;
@@ -1982,6 +1990,18 @@ function Queue() {
     await event("OPENED_WHATSAPP");
     window.open(detail.whatsappUrl, "_blank", "noopener,noreferrer");
   }
+  async function removeFromQueue() {
+    if (!pendingRemoval) return;
+    await api(`/campaigns/${id}/queue/${pendingRemoval.id}`, { method: "DELETE" });
+    const remainingItems = items.filter((item) => item.id !== pendingRemoval.id);
+    setItems(remainingItems);
+    setPendingRemoval(undefined);
+    setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
+  }
+  function finishQueue() {
+    localStorage.removeItem(`send-config:${id}`);
+    navigate("/envios");
+  }
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
@@ -2004,7 +2024,7 @@ function Queue() {
   }, [detail, index, items.length, nextIndex]);
   if (!detail)
     return (
-      <Page title="Fila de envio" back={`/campanhas/${id}`}>
+      <Page title="Fila de envio" back={`/campanhas/${id}`} action={<button className="secondary inline" onClick={finishQueue}>Encerrar fila</button>}>
         <Empty text="Nenhum contato disponível nesta campanha" />
       </Page>
     );
@@ -2014,6 +2034,7 @@ function Queue() {
       title="Fila de envio"
       subtitle={`Contato ${index + 1} de ${items.length}`}
       back={`/campanhas/${id}`}
+      action={<button className="secondary inline" onClick={finishQueue}>Encerrar fila</button>}
     >
       <div className="queue-progress">
         <div
@@ -2076,6 +2097,9 @@ function Queue() {
             <button disabled={nextIndex !== undefined} onClick={() => event("NO_WHATSAPP")}>
               Sem WhatsApp <kbd>S</kbd>
             </button>
+            <button className="danger-button" disabled={nextIndex !== undefined} onClick={() => setPendingRemoval(detail)}>
+              <Trash2 size={16}/> Remover da lista
+            </button>
           </div>
         </div>
         <div className="queue-nav">
@@ -2092,6 +2116,7 @@ function Queue() {
           </button>
         </div>
       </section>
+      {pendingRemoval && <ConfirmDialog title="Remover contato desta lista?" description={`${pendingRemoval.contact.name || pendingRemoval.contact.phone} será removido somente desta campanha. O cadastro geral será preservado.`} confirmLabel="Remover da lista" close={() => setPendingRemoval(undefined)} onConfirm={removeFromQueue} />}
     </Page>
   );
 }

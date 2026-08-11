@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractVariables, renderTemplate, resolveContactData } from './template.js';
+import { extractVariables, renderCampaignMessage, renderTemplate, resolveContactData } from './template.js';
 describe('template seguro', () => {
   it('substitui variáveis e URL', () => expect(renderTemplate('Olá {{nome}}, veja {{url}}', { nome: 'João', url: 'https://teste.com/123' })).toBe('Olá João, veja https://teste.com/123'));
   it('aplica fallback sem eval', () => expect(renderTemplate('Olá {{nome|cliente}}', { nome: '' })).toBe('Olá cliente'));
@@ -13,4 +13,12 @@ describe('template seguro', () => {
       'João - 5565999999999 - Cuiabá - Gerente - Cliente preferencial',
     );
   });
+});
+describe('mensagem da campanha', () => {
+  it('inclui a URL padrão quando ela não está no texto', () => expect(
+    renderCampaignMessage('Olá, {{nome}}', { nome: 'Ana', url: 'https://exemplo.com' }),
+  ).toBe('Olá, Ana\n\nhttps://exemplo.com'));
+  it('não duplica uma URL usada pela variável', () => expect(
+    renderCampaignMessage('Acesse {{url}}', { url: 'https://exemplo.com' }),
+  ).toBe('Acesse https://exemplo.com'));
 });

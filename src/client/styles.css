@@ -768,6 +768,11 @@ td:first-child span {
   color: #147a55;
   background: #eefaf5;
 }
+.result button.danger-button {
+  border-color: #efb4b4;
+  color: #a62f2f;
+  background: #fff4f4;
+}
 .queue-nav {
   display: flex;
   justify-content: space-between;
