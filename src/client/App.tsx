@@ -31,6 +31,9 @@ import {
   Search,
   UserPlus,
   ShieldCheck,
+  Timer,
+  Play,
+  Pause,
 } from "lucide-react";
 import { api, session } from "./api";
 type User = { id: string; name: string; email: string; role: string };
@@ -134,6 +137,7 @@ const menus = [
   [Users, "Contatos", "/contatos"],
   [FileUp, "Importações", "/importacoes"],
   [MessageSquareText, "Modelos", "/modelos"],
+  [Timer, "Envios", "/envios"],
   [BarChart3, "Relatórios", "/relatorios"],
   [Settings, "Configurações", "/configuracoes"],
 ] as const;
@@ -182,6 +186,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
           <Route path="/campanhas" element={<Campaigns />} />
           <Route path="/importacoes" element={<Imports />} />
           <Route path="/modelos" element={<Models />} />
+          <Route path="/envios" element={<SendSetup />} />
           <Route path="/contatos" element={<Contacts />} />
           <Route path="/relatorios" element={<Reports />} />
           <Route
@@ -1841,15 +1846,99 @@ type QueueItem = {
   generatedMessage?: string;
   whatsappUrl?: string;
 };
+type SendConfig = { minSeconds: number; maxSeconds: number };
+function SendSetup() {
+  const navigate = useNavigate();
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [templates, setTemplates] = useState<MessageModel[]>([]);
+  const [campaignId, setCampaignId] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    Promise.all([
+      api<{ items: Campaign[] }>("/campaigns?pageSize=100"),
+      api<{ items: MessageModel[] }>("/templates?pageSize=100"),
+    ]).then(([campaignResult, templateResult]) => {
+      setCampaigns(campaignResult.items);
+      setTemplates(templateResult.items);
+    });
+  }, []);
+  async function start(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const minSeconds = Number(form.get("minSeconds"));
+    const maxSeconds = Number(form.get("maxSeconds"));
+    if (maxSeconds < minSeconds) {
+      setError("O intervalo máximo deve ser maior ou igual ao mínimo.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/campaigns/${campaignId}/apply-template`, {
+        method: "POST",
+        body: JSON.stringify({ templateId }),
+      });
+      sessionStorage.setItem(
+        `send-config:${campaignId}`,
+        JSON.stringify({ minSeconds, maxSeconds }),
+      );
+      navigate(`/campanhas/${campaignId}/fila?status=PENDING`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível iniciar a fila");
+      setBusy(false);
+    }
+  }
+  const selected = campaigns.find((item) => item.id === campaignId);
+  return (
+    <Page title="Envios assistidos" subtitle="Prepare a lista, o modelo e o ritmo de atendimento">
+      <div className="send-setup-grid">
+        <form className="panel stack" onSubmit={start}>
+          <div className="setup-step"><span>1</span><div><strong>Campanha e contatos</strong><small>Serão carregados somente os contatos pendentes.</small></div></div>
+          <label>Campanha
+            <select required value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+              <option value="">Selecione uma campanha</option>
+              {campaigns.map((item) => <option key={item.id} value={item.id}>{item.name} — {item._count?.contacts ?? 0} contatos</option>)}
+            </select>
+          </label>
+          {selected && <div className="selection-summary"><Users size={18}/><span><strong>{selected._count?.contacts ?? 0}</strong> contatos na lista da campanha</span></div>}
+          <div className="setup-step"><span>2</span><div><strong>Modelo de mensagem</strong><small>O conteúdo e o anexo do modelo serão aplicados à campanha.</small></div></div>
+          <label>Modelo
+            <select required value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value="">Selecione um modelo</option>
+              {templates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <div className="setup-step"><span>3</span><div><strong>Intervalo entre contatos</strong><small>O próximo contato só é liberado após a confirmação manual e a pausa.</small></div></div>
+          <div className="form-grid">
+            <label>Mínimo (segundos)<input name="minSeconds" type="number" min="0" max="3600" defaultValue="20" required /></label>
+            <label>Máximo (segundos)<input name="maxSeconds" type="number" min="0" max="3600" defaultValue="40" required /></label>
+          </div>
+          {error && <div className="error">{error}</div>}
+          <button className="primary inline" disabled={busy || !campaignId || !templateId}><Play size={18}/>{busy ? "Preparando…" : "Preparar fila"}</button>
+        </form>
+        <section className="panel safety-note"><ShieldCheck size={28}/><h3>Operação assistida</h3><p>Cada conversa é aberta individualmente. O operador revisa a mensagem, envia no WhatsApp e confirma o resultado antes de seguir.</p></section>
+      </div>
+    </Page>
+  );
+}
 function Queue() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [items, setItems] = useState<QueueItem[]>([]);
   const [index, setIndex] = useState(0);
   const [detail, setDetail] = useState<QueueItem>();
+  const [remaining, setRemaining] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [nextIndex, setNextIndex] = useState<number>();
+  const config: SendConfig = (() => {
+    try { return JSON.parse(sessionStorage.getItem(`send-config:${id}`) || ""); }
+    catch { return { minSeconds: 0, maxSeconds: 0 }; }
+  })();
   const load = () =>
     api<{ items: QueueItem[]; total: number }>(
-      `/campaigns/${id}/queue?pageSize=200`,
+      `/campaigns/${id}/queue?pageSize=200${new URLSearchParams(location.search).get("status") ? `&status=${new URLSearchParams(location.search).get("status")}` : ""}`,
     ).then((x) => setItems(x.items));
   useEffect(() => {
     void load();
@@ -1859,6 +1948,17 @@ function Queue() {
     if (item)
       api<QueueItem>(`/campaigns/${id}/queue/${item.id}`).then(setDetail);
   }, [items, index, id]);
+  useEffect(() => {
+    if (!nextIndex || paused || remaining <= 0) return;
+    const timer = window.setInterval(() => setRemaining((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [nextIndex, paused, remaining]);
+  useEffect(() => {
+    if (nextIndex === undefined || remaining > 0) return;
+    setIndex(nextIndex);
+    setNextIndex(undefined);
+    setPaused(false);
+  }, [remaining, nextIndex]);
   async function event(type: string) {
     if (!detail) return;
     await api(`/campaigns/${id}/queue/${detail.id}/events`, {
@@ -1869,7 +1969,12 @@ function Queue() {
       setItems((old) =>
         old.map((x, i) => (i === index ? { ...x, status: type } : x)),
       );
-      setIndex((i) => Math.min(i + 1, items.length - 1));
+      const target = Math.min(index + 1, items.length - 1);
+      if (target !== index) {
+        const wait = Math.floor(Math.random() * (config.maxSeconds - config.minSeconds + 1)) + config.minSeconds;
+        setRemaining(wait);
+        setNextIndex(target);
+      }
     }
   }
   async function open() {
@@ -1885,6 +1990,7 @@ function Queue() {
         )
       )
         return;
+      if (nextIndex !== undefined) return;
       if (e.key.toLowerCase() === "w") open();
       if (e.key.toLowerCase() === "e") event("SENT");
       if (e.key.toLowerCase() === "n") event("NOT_SENT");
@@ -1895,7 +2001,7 @@ function Queue() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [detail, index, items.length]);
+  }, [detail, index, items.length, nextIndex]);
   if (!detail)
     return (
       <Page title="Fila de envio" back={`/campanhas/${id}`}>
@@ -1916,6 +2022,14 @@ function Queue() {
           }}
         />
       </div>
+      {nextIndex !== undefined && (
+        <section className="cooldown-bar">
+          <Timer size={20}/>
+          <div><strong>{paused ? "Intervalo pausado" : `Próximo contato em ${remaining}s`}</strong><span>O WhatsApp não será aberto automaticamente.</span></div>
+          <button className="secondary inline" onClick={() => setPaused((value) => !value)}>{paused ? <Play size={16}/> : <Pause size={16}/>} {paused ? "Retomar" : "Pausar"}</button>
+          <button className="ghost" onClick={() => setRemaining(0)}>Liberar agora</button>
+        </section>
+      )}
       <section className="queue-card">
         <div className="queue-head">
           <div className="avatar large">{detail.contact.name?.[0] || "?"}</div>
@@ -1945,21 +2059,21 @@ function Queue() {
             <Copy size={16} /> Copiar mensagem
           </button>
         </div>
-        <button className="whatsapp" onClick={open}>
+        <button className="whatsapp" onClick={open} disabled={nextIndex !== undefined}>
           <ExternalLink size={20} />
           Abrir WhatsApp <kbd>W</kbd>
         </button>
         <div className="result">
           <span>Qual foi o resultado?</span>
           <div>
-            <button className="sent" onClick={() => event("SENT")}>
+            <button className="sent" disabled={nextIndex !== undefined} onClick={() => event("SENT")}>
               <Check size={17} />
               Enviado <kbd>E</kbd>
             </button>
-            <button onClick={() => event("NOT_SENT")}>
+            <button disabled={nextIndex !== undefined} onClick={() => event("NOT_SENT")}>
               Não enviado <kbd>N</kbd>
             </button>
-            <button onClick={() => event("NO_WHATSAPP")}>
+            <button disabled={nextIndex !== undefined} onClick={() => event("NO_WHATSAPP")}>
               Sem WhatsApp <kbd>S</kbd>
             </button>
           </div>

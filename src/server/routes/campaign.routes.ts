@@ -111,6 +111,35 @@ campaignRoutes.patch("/:id", async (req, res) => {
   });
   res.json(item);
 });
+campaignRoutes.post("/:id/apply-template", async (req, res) => {
+  const input = z.object({ templateId: z.string().min(1) }).parse(req.body);
+  const [campaign, template] = await Promise.all([
+    prisma.campaign.findUnique({ where: { id: req.params.id }, select: { id: true } }),
+    prisma.messageTemplate.findUnique({ where: { id: input.templateId } }),
+  ]);
+  if (!campaign) throw new AppError(404, "Campanha não encontrada");
+  if (!template) throw new AppError(404, "Modelo não encontrado");
+  const item = await prisma.campaign.update({
+    where: { id: campaign.id },
+    data: {
+      messageTemplate: template.message,
+      defaultUrl: template.defaultUrl,
+      attachmentName: template.attachmentName,
+      attachmentMime: template.attachmentMime,
+      attachmentData: template.attachmentData,
+    },
+    omit: { attachmentData: true },
+  });
+  await audit({
+    userId: req.user!.id,
+    action: "APPLY_TEMPLATE_TO_CAMPAIGN",
+    entity: "Campaign",
+    entityId: campaign.id,
+    ip: req.ip,
+    metadata: { templateId: template.id },
+  });
+  res.json(item);
+});
 campaignRoutes.delete("/:id", async (req, res) => {
   const id = z.string().min(1).parse(req.params.id);
   const item = await prisma.campaign.findUnique({
