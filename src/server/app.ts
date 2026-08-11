@@ -28,7 +28,10 @@ app.use(
   }),
   authRoutes,
 );
-app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+const health = (_req: express.Request, res: express.Response) =>
+  res.status(200).json({ status: "ok" });
+app.get("/health", health);
+app.get("/api/health", health);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/campaigns", campaignRoutes);
 app.use("/api/contacts", contactRoutes);
