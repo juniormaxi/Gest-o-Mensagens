@@ -143,7 +143,7 @@ const menus = [
   [Users, "Contatos", "/contatos", ["ADMIN", "OPERATOR", "EDITOR"]],
   [FileUp, "Importações", "/importacoes", ["ADMIN", "OPERATOR", "EDITOR"]],
   [MessageSquareText, "Modelos", "/modelos", ["ADMIN", "OPERATOR", "EDITOR"]],
-  [Timer, "Envios", "/envios", ["ADMIN", "OPERATOR"]],
+  [Timer, "Envios", "/envios", ["ADMIN"]],
   [BarChart3, "Relatórios", "/relatorios", ["ADMIN", "OPERATOR", "EDITOR"]],
   [Settings, "Configurações", "/configuracoes", ["ADMIN"]],
 ] as const;
