@@ -9,9 +9,12 @@ reportRoutes.get("/summary", async (_req, res) => {
   const since = new Date();
   since.setDate(since.getDate() - 29);
   since.setHours(0, 0, 0, 0);
+  const campaignWhere = _req.user!.role === "ADMIN" ? {} : { ownerId: _req.user!.id };
+  const relatedCampaign = _req.user!.role === "ADMIN" ? {} : { campaign: campaignWhere };
   const [campaigns, campaignStatuses, users, userSent, daily] =
     await prisma.$transaction([
       prisma.campaign.findMany({
+        where: campaignWhere,
         orderBy: { createdAt: "desc" },
         select: { id: true, name: true, status: true, createdAt: true },
       }),
@@ -19,9 +22,10 @@ reportRoutes.get("/summary", async (_req, res) => {
         by: ["campaignId", "status"],
         orderBy: [{ campaignId: "asc" }, { status: "asc" }],
         _count: { _all: true },
+        where: relatedCampaign,
       }),
       prisma.user.findMany({
-        where: { active: true },
+        where: { active: true, ...(_req.user!.role === "ADMIN" ? {} : { id: _req.user!.id }) },
         select: {
           id: true,
           name: true,
@@ -32,15 +36,24 @@ reportRoutes.get("/summary", async (_req, res) => {
       }),
       prisma.messageEvent.groupBy({
         by: ["userId"],
-        where: { eventType: "SENT" },
+        where: { eventType: "SENT", ...relatedCampaign },
         orderBy: { userId: "asc" },
         _count: { _all: true },
         _max: { createdAt: true },
       }),
-      prisma.$queryRaw<Array<{ day: Date; sent: bigint }>>`
+      _req.user!.role === "ADMIN"
+        ? prisma.$queryRaw<Array<{ day: Date; sent: bigint }>>`
         SELECT date_trunc('day', "created_at") AS day, COUNT(*)::bigint AS sent
         FROM "message_events"
         WHERE "event_type" = 'SENT' AND "created_at" >= ${since}
+        GROUP BY 1 ORDER BY 1 ASC
+      `
+        : prisma.$queryRaw<Array<{ day: Date; sent: bigint }>>`
+        SELECT date_trunc('day', e."created_at") AS day, COUNT(*)::bigint AS sent
+        FROM "message_events" e
+        JOIN "campaigns" c ON c."id" = e."campaign_id"
+        WHERE e."event_type" = 'SENT' AND e."created_at" >= ${since}
+          AND c."owner_id" = ${_req.user!.id}
         GROUP BY 1 ORDER BY 1 ASC
       `,
     ]);

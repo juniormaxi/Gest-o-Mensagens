@@ -13,6 +13,23 @@ import { renderCampaignMessage, resolveContactData } from "../../shared/template
 import { WhatsAppWebProvider } from "../providers/whatsapp-web.provider.js";
 export const campaignRoutes = Router();
 campaignRoutes.use(authenticate);
+campaignRoutes.use(async (req, _res, next) => {
+  const editorCannotOperateCampaign =
+    req.user?.role === "EDITOR" &&
+    (req.path.includes("/queue") || req.path === "/queues/active" || req.path.includes("/apply-template"));
+  if (editorCannotOperateCampaign)
+    return next(new AppError(403, "O perfil Editor não possui acesso aos envios"));
+  if (req.user?.role !== "ADMIN") {
+    const campaignId = req.path.split("/")[1];
+    if (campaignId && campaignId !== "queues") {
+      const owned = await prisma.campaign.count({
+        where: { id: campaignId, ownerId: req.user!.id },
+      });
+      if (!owned) return next(new AppError(404, "Campanha não encontrada"));
+    }
+  }
+  next();
+});
 const campaignInput = z.object({
   name: z.string().min(2).max(120),
   description: z.string().max(2000).optional(),
@@ -34,6 +51,7 @@ campaignRoutes.get("/", async (req, res) => {
     })
     .parse(req.query);
   const where = {
+    ...(req.user!.role === "ADMIN" ? {} : { ownerId: req.user!.id }),
     ...(query.search
       ? { name: { contains: query.search, mode: "insensitive" as const } }
       : {}),
@@ -76,7 +94,7 @@ campaignRoutes.post("/", async (req, res) => {
 });
 campaignRoutes.get("/queues/active", async (_req, res) => {
   const items = await prisma.campaign.findMany({
-    where: { queueActive: true },
+    where: { queueActive: true, ...(_req.user!.role === "ADMIN" ? {} : { ownerId: _req.user!.id }) },
     orderBy: { queueStartedAt: "desc" },
     select: {
       id: true,

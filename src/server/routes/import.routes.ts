@@ -9,8 +9,11 @@ import { AppError } from "../lib/errors.js";
 import { normalizeBrazilianPhone } from "../../shared/phone.js";
 import { audit } from "../services/audit.service.js";
 import type { Prisma } from "@prisma/client";
+import type { Request } from "express";
 export const importRoutes = Router();
 importRoutes.use(authenticate);
+const importScope = (req: Request) =>
+  req.user!.role === "ADMIN" ? {} : { campaign: { ownerId: req.user!.id } };
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -58,17 +61,18 @@ importRoutes.get("/", async (req, res) => {
       skip: (query.page - 1) * query.pageSize,
       take: query.pageSize,
       orderBy: { createdAt: "desc" },
+      where: importScope(req),
       include: { campaign: { select: { id: true, name: true } } },
     }),
-    prisma.import.count(),
+    prisma.import.count({ where: importScope(req) }),
   ]);
   res.json({ items, total, page: query.page, pageSize: query.pageSize });
 });
 
 importRoutes.delete("/:id", async (req, res) => {
   const id = z.string().min(1).parse(req.params.id);
-  const item = await prisma.import.findUnique({
-    where: { id },
+  const item = await prisma.import.findFirst({
+    where: { id, ...importScope(req) },
     select: { id: true, fileName: true, campaignId: true, status: true },
   });
   if (!item) throw new AppError(404, "Importação não encontrada");
@@ -133,7 +137,7 @@ async function parseSpreadsheet(
 importRoutes.post("/preview", upload.single("file"), async (req, res) => {
   if (!req.file) throw new AppError(400, "Arquivo CSV ou XLSX obrigatório");
   const campaignId = z.string().min(1).parse(req.body.campaignId);
-  if (!(await prisma.campaign.count({ where: { id: campaignId } })))
+  if (!(await prisma.campaign.count({ where: { id: campaignId, ...(req.user!.role === "ADMIN" ? {} : { ownerId: req.user!.id }) } })))
     throw new AppError(404, "Campanha não encontrada");
   let rows: Record<string, unknown>[];
   try {
@@ -178,7 +182,7 @@ const mappingSchema = z.object({
 });
 importRoutes.post("/:id/validate", async (req, res) => {
   const mapping = mappingSchema.parse(req.body);
-  const imp = await prisma.import.findUnique({ where: { id: req.params.id } });
+  const imp = await prisma.import.findFirst({ where: { id: req.params.id, ...importScope(req) } });
   if (!imp) throw new AppError(404, "Importação não encontrada");
   const rows = await prisma.importRow.findMany({
     where: { importId: imp.id },
@@ -225,8 +229,8 @@ importRoutes.post("/:id/validate", async (req, res) => {
 });
 importRoutes.post("/:id/confirm", async (req, res) => {
   const mapping = mappingSchema.parse(req.body);
-  const imp = await prisma.import.findUnique({
-    where: { id: req.params.id },
+  const imp = await prisma.import.findFirst({
+    where: { id: req.params.id, ...importScope(req) },
     include: { campaign: true },
   });
   if (!imp) throw new AppError(404, "Importação não encontrada");

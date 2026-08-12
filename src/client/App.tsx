@@ -36,7 +36,10 @@ import {
   Pause,
 } from "lucide-react";
 import { api, session } from "./api";
-type User = { id: string; name: string; email: string; role: string };
+type UserRole = "ADMIN" | "OPERATOR" | "EDITOR";
+type User = { id: string; name: string; email: string; role: UserRole };
+const roleLabel = (role: UserRole) =>
+  role === "ADMIN" ? "Administrador" : role === "EDITOR" ? "Editor" : "Operador";
 type Campaign = {
   id: string;
   name: string;
@@ -135,14 +138,14 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
   );
 }
 const menus = [
-  [LayoutDashboard, "Dashboard", "/"],
-  [Megaphone, "Campanhas", "/campanhas"],
-  [Users, "Contatos", "/contatos"],
-  [FileUp, "Importações", "/importacoes"],
-  [MessageSquareText, "Modelos", "/modelos"],
-  [Timer, "Envios", "/envios"],
-  [BarChart3, "Relatórios", "/relatorios"],
-  [Settings, "Configurações", "/configuracoes"],
+  [LayoutDashboard, "Dashboard", "/", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [Megaphone, "Campanhas", "/campanhas", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [Users, "Contatos", "/contatos", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [FileUp, "Importações", "/importacoes", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [MessageSquareText, "Modelos", "/modelos", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [Timer, "Envios", "/envios", ["ADMIN", "OPERATOR"]],
+  [BarChart3, "Relatórios", "/relatorios", ["ADMIN", "OPERATOR", "EDITOR"]],
+  [Settings, "Configurações", "/configuracoes", ["ADMIN"]],
 ] as const;
 function Shell({ user, logout }: { user: User; logout: () => void }) {
   return (
@@ -153,7 +156,9 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
           <span>WhatsSender</span>
         </div>
         <nav>
-          {menus.map(([Icon, label, to]) => (
+          {menus.filter(([, , , roles]) =>
+            (roles as readonly UserRole[]).includes(user.role),
+          ).map(([Icon, label, to]) => (
             <NavLink key={to} to={to} end={to === "/"}>
               <Icon size={19} />
               <span>{label}</span>
@@ -179,7 +184,7 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
             <div>
               <strong>{user.name}</strong>
               <span>
-                {user.role === "ADMIN" ? "Administrador" : "Operador"}
+                {roleLabel(user.role)}
               </span>
             </div>
           </div>
@@ -189,15 +194,15 @@ function Shell({ user, logout }: { user: User; logout: () => void }) {
           <Route path="/campanhas" element={<Campaigns />} />
           <Route path="/importacoes" element={<Imports />} />
           <Route path="/modelos" element={<Models />} />
-          <Route path="/envios" element={<SendSetup />} />
-          <Route path="/contatos" element={<Contacts />} />
+          <Route path="/envios" element={user.role === "EDITOR" ? <Navigate to="/" replace /> : <SendSetup />} />
+          <Route path="/contatos" element={<Contacts userRole={user.role} />} />
           <Route path="/relatorios" element={<Reports />} />
           <Route
             path="/configuracoes"
-            element={<SettingsUsers currentUser={user} />}
+            element={user.role === "ADMIN" ? <SettingsUsers currentUser={user} /> : <Navigate to="/" replace />}
           />
           <Route path="/campanhas/:id" element={<CampaignDetail />} />
-          <Route path="/campanhas/:id/fila" element={<Queue />} />
+          <Route path="/campanhas/:id/fila" element={user.role === "EDITOR" ? <Navigate to="/" replace /> : <Queue />} />
           <Route path="*" element={<Placeholder />} />
         </Routes>
       </div>
@@ -469,7 +474,7 @@ type ContactItem = {
     };
   }>;
 };
-function Contacts() {
+function Contacts({ userRole }: { userRole: UserRole }) {
   const [items, setItems] = useState<ContactItem[]>([]);
   const [total, setTotal] = useState(0);
   const [overallTotal, setOverallTotal] = useState(0);
@@ -554,7 +559,7 @@ function Contacts() {
               <th>Tags de importação</th>
               <th>Campanhas</th>
               <th>Envios realizados</th>
-              <th>Ações</th>
+              {userRole !== "EDITOR" && <th>Ações</th>}
             </tr>
           </thead>
           <tbody>
@@ -588,15 +593,17 @@ function Contacts() {
                 <td>
                   <strong className="sent-count">{contact.sentCount}</strong>
                 </td>
-                <td>
-                  <button
-                    className="icon"
-                    onClick={() => setEditing(contact)}
-                    title="Editar contato"
-                  >
-                    <Pencil size={16} />
-                  </button>
-                </td>
+                {userRole !== "EDITOR" && (
+                  <td>
+                    <button
+                      className="icon"
+                      onClick={() => setEditing(contact)}
+                      title="Editar contato"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -833,7 +840,7 @@ type ManagedUser = {
   id: string;
   name: string;
   email: string;
-  role: "ADMIN" | "OPERATOR";
+  role: UserRole;
   active: boolean;
   createdAt: string;
   _count: { campaigns: number; events: number };
@@ -946,7 +953,7 @@ function SettingsUsers({ currentUser }: { currentUser: User }) {
                 <td>
                   <span className="role-label">
                     <ShieldCheck size={14} />
-                    {item.role === "ADMIN" ? "Administrador" : "Operador"}
+                    {roleLabel(item.role)}
                   </span>
                 </td>
                 <td>
@@ -1005,6 +1012,7 @@ function SettingsUsers({ currentUser }: { currentUser: User }) {
                 Perfil
                 <select name="role" defaultValue={editing?.role ?? "OPERATOR"}>
                   <option value="OPERATOR">Operador</option>
+                  <option value="EDITOR">Editor</option>
                   <option value="ADMIN">Administrador</option>
                 </select>
               </label>
@@ -2003,6 +2011,9 @@ function Queue() {
     if (type !== "OPENED_WHATSAPP") {
       if (type === "NO_WHATSAPP") {
         const remainingItems = items.filter((item) => item.id !== detail.id);
+        setNextIndex(undefined);
+        setRemaining(0);
+        setPaused(false);
         setItems(remainingItems);
         setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
         return;
@@ -2026,12 +2037,15 @@ function Queue() {
     if (!detail) return;
     window.open(detail.whatsappUrl, "_blank", "noopener,noreferrer");
     await event("OPENED_WHATSAPP");
-    await event("SENT", true);
+    await event("SENT");
   }
   async function blockContact() {
     if (!pendingBlock) return;
     await api(`/campaigns/${id}/queue/${pendingBlock.id}/block`, { method: "POST" });
     const remainingItems = items.filter((item) => item.id !== pendingBlock.id);
+    setNextIndex(undefined);
+    setRemaining(0);
+    setPaused(false);
     setItems(remainingItems);
     setPendingBlock(undefined);
     setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
@@ -2040,6 +2054,9 @@ function Queue() {
     if (!pendingRemoval) return;
     await api(`/campaigns/${id}/queue/${pendingRemoval.id}`, { method: "DELETE" });
     const remainingItems = items.filter((item) => item.id !== pendingRemoval.id);
+    setNextIndex(undefined);
+    setRemaining(0);
+    setPaused(false);
     setItems(remainingItems);
     setPendingRemoval(undefined);
     setIndex((value) => Math.min(value, Math.max(0, remainingItems.length - 1)));
@@ -2138,20 +2155,20 @@ function Queue() {
         <div className="result">
           <span>Qual foi o resultado?</span>
           <div>
-            <button className="sent" disabled={nextIndex !== undefined} onClick={() => event("SENT")}>
+            <button className="sent" onClick={() => event("SENT")}>
               <Check size={17} />
               Enviado <kbd>E</kbd>
             </button>
-            <button disabled={nextIndex !== undefined} onClick={() => event("NOT_SENT")}>
+            <button onClick={() => event("NOT_SENT")}>
               Não enviado <kbd>N</kbd>
             </button>
-            <button disabled={nextIndex !== undefined} onClick={() => event("NO_WHATSAPP")}>
+            <button onClick={() => event("NO_WHATSAPP")}>
               Sem WhatsApp <kbd>S</kbd>
             </button>
-            <button className="danger-button" disabled={nextIndex !== undefined} onClick={() => setPendingRemoval(detail)}>
+            <button className="danger-button" onClick={() => setPendingRemoval(detail)}>
               <Trash2 size={16}/> Remover da lista
             </button>
-            <button className="blacklist-button" disabled={nextIndex !== undefined} onClick={() => setPendingBlock(detail)}>
+            <button className="blacklist-button" onClick={() => setPendingBlock(detail)}>
               <ShieldCheck size={16}/> Não enviar mensagens
             </button>
           </div>

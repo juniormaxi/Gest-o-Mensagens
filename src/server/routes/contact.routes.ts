@@ -8,6 +8,21 @@ import { audit } from "../services/audit.service.js";
 import type { Prisma } from "@prisma/client";
 export const contactRoutes = Router();
 contactRoutes.use(authenticate);
+contactRoutes.use(async (req, _res, next) => {
+  if (req.user?.role === "EDITOR" && req.method !== "GET")
+    return next(new AppError(403, "O perfil Editor possui acesso somente para consulta de contatos"));
+  const contactId = req.path.split("/")[1];
+  if (req.user?.role !== "ADMIN" && contactId) {
+    const visible = await prisma.contact.count({
+      where: {
+        id: contactId,
+        campaigns: { some: { campaign: { ownerId: req.user!.id } } },
+      },
+    });
+    if (!visible) return next(new AppError(404, "Contato não encontrado"));
+  }
+  next();
+});
 const contactInput = z.object({
   name: z.string().max(160).optional(),
   phone: z.string(),
@@ -38,14 +53,21 @@ contactRoutes.get("/", async (req, res) => {
         ],
       }
     : {};
+  const scopedWhere = {
+    ...where,
+    ...(req.user!.role === "ADMIN"
+      ? {}
+      : { campaigns: { some: { campaign: { ownerId: req.user!.id } } } }),
+  };
   const [items, total, overallTotal] = await prisma.$transaction([
     prisma.contact.findMany({
-      where,
+      where: scopedWhere,
       skip: (q.page - 1) * q.pageSize,
       take: q.pageSize,
       orderBy: { createdAt: "desc" },
       include: {
         imports: {
+          where: req.user!.role === "ADMIN" ? {} : { import: { campaign: { ownerId: req.user!.id } } },
           take: 8,
           orderBy: { createdAt: "desc" },
           include: {
@@ -63,8 +85,8 @@ contactRoutes.get("/", async (req, res) => {
         },
       },
     }),
-    prisma.contact.count({ where }),
-    prisma.contact.count(),
+    prisma.contact.count({ where: scopedWhere }),
+    prisma.contact.count({ where: req.user!.role === "ADMIN" ? {} : { campaigns: { some: { campaign: { ownerId: req.user!.id } } } } }),
   ]);
   res.json({
     items: items.map((item) => ({
@@ -80,10 +102,11 @@ contactRoutes.get("/", async (req, res) => {
 });
 contactRoutes.get("/:id", async (req, res) => {
   const id = z.string().parse(req.params.id);
-  const item = await prisma.contact.findUnique({
-    where: { id },
+  const item = await prisma.contact.findFirst({
+    where: { id, ...(req.user!.role === "ADMIN" ? {} : { campaigns: { some: { campaign: { ownerId: req.user!.id } } } }) },
     include: {
       imports: {
+        where: req.user!.role === "ADMIN" ? {} : { import: { campaign: { ownerId: req.user!.id } } },
         include: {
           import: {
             include: { campaign: { select: { id: true, name: true } } },
@@ -92,6 +115,7 @@ contactRoutes.get("/:id", async (req, res) => {
         orderBy: { createdAt: "desc" },
       },
       campaigns: {
+        where: req.user!.role === "ADMIN" ? {} : { campaign: { ownerId: req.user!.id } },
         include: {
           campaign: { select: { id: true, name: true } },
           events: { orderBy: { createdAt: "desc" }, take: 50 },
