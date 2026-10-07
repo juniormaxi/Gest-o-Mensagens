@@ -71,7 +71,28 @@ campaignRoutes.get("/", async (req, res) => {
     }),
     prisma.campaign.count({ where }),
   ]);
-  res.json({ items, total, page: query.page, pageSize: query.pageSize });
+  const removed = items.length
+    ? await prisma.campaignContact.groupBy({
+        by: ["campaignId"],
+        where: {
+          campaignId: { in: items.map((item) => item.id) },
+          status: "REMOVED",
+        },
+        _count: true,
+      })
+    : [];
+  const removedByCampaign = new Map(
+    removed.map((item) => [item.campaignId, item._count]),
+  );
+  res.json({
+    items: items.map((item) => ({
+      ...item,
+      removedCount: removedByCampaign.get(item.id) ?? 0,
+    })),
+    total,
+    page: query.page,
+    pageSize: query.pageSize,
+  });
 });
 campaignRoutes.post("/", async (req, res) => {
   const input = campaignInput.parse(req.body);
@@ -307,7 +328,9 @@ campaignRoutes.get("/:id/queue", async (req, res) => {
           }
         : {}),
     },
-    ...(query.status ? { status: query.status } : {}),
+    ...(query.status
+      ? { status: query.status }
+      : { status: { not: "REMOVED" as const } }),
   };
   const [items, total] = await prisma.$transaction([
     prisma.campaignContact.findMany({
@@ -468,17 +491,46 @@ campaignRoutes.post("/:id/queue/:campaignContactId/block", async (req, res) => {
 campaignRoutes.delete("/:id/queue/:campaignContactId", async (req, res) => {
   const current = await prisma.campaignContact.findFirst({
     where: { id: req.params.campaignContactId, campaignId: req.params.id },
-    select: { id: true, contactId: true },
+    select: { id: true, contactId: true, sourceImportId: true },
   });
   if (!current) throw new AppError(404, "Contato da campanha não encontrado");
-  await prisma.campaignContact.delete({ where: { id: current.id } });
-  await audit({
-    userId: req.user!.id,
-    action: "REMOVE_CONTACT_FROM_CAMPAIGN_QUEUE",
-    entity: "CampaignContact",
-    entityId: current.id,
-    ip: req.ip,
-    metadata: { campaignId: req.params.id, contactId: current.contactId },
+  await prisma.$transaction(async (tx) => {
+    await tx.campaignContact.update({
+      where: { id: current.id },
+      data: { status: "REMOVED" },
+    });
+    if (current.sourceImportId) {
+      await tx.contactImport.deleteMany({
+        where: {
+          importId: current.sourceImportId,
+          contactId: current.contactId,
+        },
+      });
+      await tx.campaignContact.updateMany({
+        where: {
+          id: { not: current.id },
+          sourceImportId: current.sourceImportId,
+          contactId: current.contactId,
+          status: "PENDING",
+        },
+        data: { status: "REMOVED" },
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        userId: req.user!.id,
+        action: "REMOVE_CONTACT_FROM_CAMPAIGN_QUEUE",
+        entity: "CampaignContact",
+        entityId: current.id,
+        ip: req.ip,
+        metadata: {
+          campaignId: req.params.id,
+          contactId: current.contactId,
+          sourceImportId: current.sourceImportId,
+          removedFromSavedList: Boolean(current.sourceImportId),
+        },
+      },
+    });
   });
   res.status(204).end();
 });

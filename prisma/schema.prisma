@@ -28,6 +28,7 @@ enum CampaignContactStatus {
   NO_WHATSAPP
   ERROR
   SKIPPED
+  REMOVED
 }
 
 enum WhatsAppStatus {
@@ -134,31 +135,35 @@ model CampaignContact {
   status           CampaignContactStatus @default(PENDING)
   sentAt           DateTime?             @map("sent_at")
   sentById         String?               @map("sent_by")
+  sourceImportId   String?               @map("source_import_id")
   createdAt        DateTime              @default(now()) @map("created_at")
   updatedAt        DateTime              @updatedAt @map("updated_at")
   campaign         Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contact          Contact               @relation(fields: [contactId], references: [id])
   sentBy           User?                 @relation("SentBy", fields: [sentById], references: [id])
+  sourceImport     Import?               @relation("CampaignContactSourceImport", fields: [sourceImportId], references: [id], onDelete: SetNull)
   events           MessageEvent[]
 
   @@unique([campaignId, contactId])
   @@index([campaignId, status, createdAt])
   @@index([contactId])
+  @@index([sourceImportId, contactId])
   @@map("campaign_contacts")
 }
 
 model Import {
-  id          String          @id @default(cuid())
-  campaignId  String          @map("campaign_id")
-  fileName    String          @map("file_name")
-  status      ImportStatus    @default(PREVIEW)
-  mapping     Json            @default("{}")
-  summary     Json            @default("{}")
-  createdAt   DateTime        @default(now()) @map("created_at")
-  completedAt DateTime?       @map("completed_at")
-  campaign    Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  rows        ImportRow[]
-  contacts    ContactImport[]
+  id               String            @id @default(cuid())
+  campaignId       String            @map("campaign_id")
+  fileName         String            @map("file_name")
+  status           ImportStatus      @default(PREVIEW)
+  mapping          Json              @default("{}")
+  summary          Json              @default("{}")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  completedAt      DateTime?         @map("completed_at")
+  campaign         Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  rows             ImportRow[]
+  contacts         ContactImport[]
+  campaignContacts CampaignContact[] @relation("CampaignContactSourceImport")
 
   @@index([campaignId, createdAt])
   @@map("imports")

@@ -55,6 +55,7 @@ type Campaign = {
   queueActive?: boolean;
   queueMinSeconds?: number;
   queueMaxSeconds?: number;
+  removedCount?: number;
 };
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -227,6 +228,7 @@ function Dashboard() {
     ["Aguardando", data.statuses.PENDING ?? 0, "warning"],
     ["Enviados", data.statuses.SENT ?? 0, "success"],
     ["Sem WhatsApp", data.statuses.NO_WHATSAPP ?? 0, "danger"],
+    ["Excluídos", data.statuses.REMOVED ?? 0, "danger"],
     ["Erros", data.statuses.ERROR ?? 0, "danger"],
   ];
   return (
@@ -329,6 +331,7 @@ function Campaigns() {
               <th>Campanha</th>
               <th>Status</th>
               <th>Contatos</th>
+              <th>Excluídos</th>
               <th>Criada em</th>
               <th />
             </tr>
@@ -346,6 +349,7 @@ function Campaigns() {
                   </span>
                 </td>
                 <td>{c._count?.contacts ?? 0}</td>
+                <td>{c.removedCount ?? 0}</td>
                 <td>{date(c.createdAt)}</td>
                 <td>
                   <div className="table-actions">
@@ -702,6 +706,7 @@ type ReportData = {
     noWhatsapp: number;
     errors: number;
     skipped: number;
+    removed: number;
     percentage: number;
   }>;
   users: Array<{
@@ -810,6 +815,7 @@ function Reports() {
               <th>Enviados</th>
               <th>Pendentes</th>
               <th>Sem WhatsApp</th>
+              <th>Excluídos</th>
               <th>Erros</th>
               <th>Conclusão</th>
             </tr>
@@ -825,6 +831,7 @@ function Reports() {
                 <td>{campaign.sent}</td>
                 <td>{campaign.pending}</td>
                 <td>{campaign.noWhatsapp}</td>
+                <td>{campaign.removed}</td>
                 <td>{campaign.errors}</td>
                 <td>
                   <strong>{campaign.percentage}%</strong>
@@ -1395,6 +1402,7 @@ function CampaignDetail() {
           ["Enviados", sent],
           ["Pendentes", c.counts?.PENDING ?? 0],
           ["Sem WhatsApp", c.counts?.NO_WHATSAPP ?? 0],
+          ["Excluídos", c.counts?.REMOVED ?? 0],
           ["Erros", c.counts?.ERROR ?? 0],
         ].map(([x, y]) => (
           <div className="metric" key={x}>
@@ -1529,6 +1537,7 @@ function Imports() {
     createdAt: string;
     summary: Record<string, number>;
     campaign: { id: string; name: string };
+    _count: { contacts: number };
   };
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setCampaignId] = useState("");
@@ -1656,7 +1665,7 @@ function Imports() {
               <th>Arquivo</th>
               <th>Campanha</th>
               <th>Status</th>
-              <th>Importados</th>
+              <th>Na lista</th>
               <th>Data</th>
               <th>Ações</th>
             </tr>
@@ -1671,7 +1680,7 @@ function Imports() {
                 <td>
                   <span className="badge">{item.status}</span>
                 </td>
-                <td>{item.summary?.imported ?? "—"}</td>
+                <td>{item._count.contacts}</td>
                 <td>{date(item.createdAt)}</td>
                 <td>
                   <div className="table-actions">
@@ -2278,7 +2287,7 @@ function Queue() {
           </button>
         </div>
       </section>
-      {pendingRemoval && <ConfirmDialog title="Remover contato desta lista?" description={`${pendingRemoval.contact.name || pendingRemoval.contact.phone} será removido somente desta campanha. O cadastro geral será preservado.`} confirmLabel="Remover da lista" close={() => setPendingRemoval(undefined)} onConfirm={removeFromQueue} />}
+      {pendingRemoval && <ConfirmDialog title="Remover contato desta lista?" description={`${pendingRemoval.contact.name || pendingRemoval.contact.phone} será excluído desta lista salva e de outros envios ainda pendentes criados a partir dela. O cadastro geral do contato será preservado.`} confirmLabel="Remover da lista" close={() => setPendingRemoval(undefined)} onConfirm={removeFromQueue} />}
       {pendingBlock && <ConfirmDialog title="Adicionar número à blacklist?" description={`${pendingBlock.contact.name || pendingBlock.contact.phone} não aparecerá mais em nenhuma fila de envio.`} confirmLabel="Não enviar mensagens" close={() => setPendingBlock(undefined)} onConfirm={blockContact} />}
     </Page>
   );
@@ -2446,6 +2455,7 @@ const statusLabel = (s: string) =>
       NO_WHATSAPP: "Sem WhatsApp",
       ERROR: "Erro",
       SKIPPED: "Ignorado",
+      REMOVED: "Excluído",
     }) as Record<string, string>
   )[s] || s;
 const date = (d: string) =>

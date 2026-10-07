@@ -80,6 +80,7 @@ reportRoutes.get("/summary", async (_req, res) => {
         noWhatsapp: counts.NO_WHATSAPP ?? 0,
         errors: counts.ERROR ?? 0,
         skipped: counts.SKIPPED ?? 0,
+        removed: counts.REMOVED ?? 0,
         percentage: total ? Math.round((sent / total) * 1000) / 10 : 0,
       };
     }),

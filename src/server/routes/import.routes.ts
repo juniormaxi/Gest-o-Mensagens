@@ -62,7 +62,10 @@ importRoutes.get("/", async (req, res) => {
       take: query.pageSize,
       orderBy: { createdAt: "desc" },
       where: importScope(req),
-      include: { campaign: { select: { id: true, name: true } } },
+      include: {
+        campaign: { select: { id: true, name: true } },
+        _count: { select: { contacts: true } },
+      },
     }),
     prisma.import.count({ where: importScope(req) }),
   ]);
@@ -131,6 +134,7 @@ importRoutes.post("/:id/reuse", async (req, res) => {
       .map((item) => ({
         campaignId: targetCampaign.id,
         contactId: item.contactId,
+        sourceImportId: sourceImport.id,
         customFields: (campaignFields.get(item.contactId) ??
           item.contact.customFields) as Prisma.InputJsonValue,
       }));
@@ -415,11 +419,15 @@ importRoutes.post("/:id/confirm", async (req, res) => {
           create: {
             campaignId: imp.campaignId,
             contactId: contact.id,
+            sourceImportId: imp.id,
             customFields: campaignFields as Prisma.InputJsonValue,
           },
           update:
             mapping.duplicateAction === "UPDATE"
-              ? { customFields: campaignFields as Prisma.InputJsonValue }
+              ? {
+                  sourceImportId: imp.id,
+                  customFields: campaignFields as Prisma.InputJsonValue,
+                }
               : {},
         });
         await tx.contactImport.upsert({
