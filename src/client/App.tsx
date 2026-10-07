@@ -34,6 +34,7 @@ import {
   Timer,
   Play,
   Pause,
+  Link2,
 } from "lucide-react";
 import { api, session } from "./api";
 type UserRole = "ADMIN" | "OPERATOR" | "EDITOR";
@@ -1521,21 +1522,22 @@ function CampaignDetail() {
   );
 }
 function Imports() {
+  type ImportItem = {
+    id: string;
+    fileName: string;
+    status: string;
+    createdAt: string;
+    summary: Record<string, number>;
+    campaign: { id: string; name: string };
+  };
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setCampaignId] = useState("");
   const [importing, setImporting] = useState(false);
-  const [items, setItems] = useState<
-    Array<{
-      id: string;
-      fileName: string;
-      status: string;
-      createdAt: string;
-      summary: Record<string, number>;
-      campaign: { id: string; name: string };
-    }>
-  >([]);
+  const [items, setItems] = useState<ImportItem[]>([]);
   const [deletingId, setDeletingId] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<(typeof items)[number]>();
+  const [pendingDelete, setPendingDelete] = useState<ImportItem>();
+  const [pendingReuse, setPendingReuse] = useState<ImportItem>();
+  const [reuseNotice, setReuseNotice] = useState("");
   const load = async () => {
     const [campaignResult, importResult] = await Promise.all([
       api<{ items: Campaign[] }>("/campaigns?pageSize=100"),
@@ -1561,7 +1563,7 @@ function Imports() {
     anchor.click();
     URL.revokeObjectURL(href);
   }
-  async function deleteImport(item: (typeof items)[number]) {
+  async function deleteImport(item: ImportItem) {
     setDeletingId(item.id);
     try {
       await api(`/imports/${item.id}`, { method: "DELETE" });
@@ -1569,6 +1571,29 @@ function Imports() {
     } finally {
       setDeletingId(undefined);
     }
+  }
+  async function reuseImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!pendingReuse) return;
+    const form = new FormData(event.currentTarget);
+    const destinationId = String(form.get("campaignId") || "");
+    const result = await api<{
+      total: number;
+      linked: number;
+      alreadyLinked: number;
+    }>(`/imports/${pendingReuse.id}/reuse`, {
+      method: "POST",
+      body: JSON.stringify({ campaignId: destinationId }),
+    });
+    const destination = campaigns.find((item) => item.id === destinationId);
+    setReuseNotice(
+      `${result.linked} contato(s) vinculado(s) à campanha ${destination?.name ?? "selecionada"}` +
+        (result.alreadyLinked
+          ? `; ${result.alreadyLinked} já estava(m) nela.`
+          : "."),
+    );
+    setPendingReuse(undefined);
+    await load();
   }
   return (
     <Page
@@ -1580,6 +1605,7 @@ function Imports() {
         </button>
       }
     >
+      {reuseNotice && <div className="success-message">{reuseNotice}</div>}
       <div className="grid-2 import-start">
         <section className="panel">
           <span className="eyebrow">ETAPA 1</span>
@@ -1648,15 +1674,28 @@ function Imports() {
                 <td>{item.summary?.imported ?? "—"}</td>
                 <td>{date(item.createdAt)}</td>
                 <td>
-                  <button
-                    className="danger-link"
-                    disabled={deletingId === item.id}
-                    onClick={() => setPendingDelete(item)}
-                    title="Excluir registro da importação"
-                  >
-                    <Trash2 size={16} />
-                    {deletingId === item.id ? "Excluindo…" : "Excluir"}
-                  </button>
+                  <div className="table-actions">
+                    <button
+                      className="link inline"
+                      disabled={item.status !== "COMPLETED"}
+                      onClick={() => {
+                        setReuseNotice("");
+                        setPendingReuse(item);
+                      }}
+                      title="Usar esta lista em outra campanha"
+                    >
+                      <Link2 size={16} /> Usar em outra campanha
+                    </button>
+                    <button
+                      className="danger-link"
+                      disabled={deletingId === item.id}
+                      onClick={() => setPendingDelete(item)}
+                      title="Excluir registro da importação"
+                    >
+                      <Trash2 size={16} />
+                      {deletingId === item.id ? "Excluindo…" : "Excluir"}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1681,6 +1720,61 @@ function Imports() {
           close={() => setPendingDelete(undefined)}
           onConfirm={() => deleteImport(pendingDelete)}
         />
+      )}
+      {pendingReuse && (
+        <Modal
+          title="Usar lista em outra campanha"
+          close={() => setPendingReuse(undefined)}
+        >
+          <form className="stack" onSubmit={reuseImport}>
+            <p className="hint">
+              Os contatos de <strong>{pendingReuse.fileName}</strong> serão
+              adicionados como pendentes à campanha escolhida. A importação e
+              a campanha original continuarão intactas.
+            </p>
+            <label>
+              Campanha de destino
+              <select name="campaignId" required defaultValue="">
+                <option value="" disabled>
+                  Selecione uma campanha
+                </option>
+                {campaigns
+                  .filter((campaign) => campaign.id !== pendingReuse.campaign.id)
+                  .map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {!campaigns.some(
+              (campaign) => campaign.id !== pendingReuse.campaign.id,
+            ) && (
+              <p className="error">
+                Crie outra campanha antes de reutilizar esta lista.
+              </p>
+            )}
+            <div className="actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setPendingReuse(undefined)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary"
+                disabled={
+                  !campaigns.some(
+                    (campaign) => campaign.id !== pendingReuse.campaign.id,
+                  )
+                }
+              >
+                Vincular contatos
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </Page>
   );

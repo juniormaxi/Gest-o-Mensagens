@@ -69,6 +69,100 @@ importRoutes.get("/", async (req, res) => {
   res.json({ items, total, page: query.page, pageSize: query.pageSize });
 });
 
+importRoutes.post("/:id/reuse", async (req, res) => {
+  const importId = z.string().min(1).parse(req.params.id);
+  const { campaignId } = z
+    .object({ campaignId: z.string().min(1) })
+    .parse(req.body);
+  const [sourceImport, targetCampaign] = await Promise.all([
+    prisma.import.findFirst({
+      where: { id: importId, ...importScope(req) },
+      select: { id: true, campaignId: true, fileName: true, status: true },
+    }),
+    prisma.campaign.findFirst({
+      where: {
+        id: campaignId,
+        ...(req.user!.role === "ADMIN" ? {} : { ownerId: req.user!.id }),
+      },
+      select: { id: true, name: true },
+    }),
+  ]);
+  if (!sourceImport) throw new AppError(404, "Importação não encontrada");
+  if (!targetCampaign) throw new AppError(404, "Campanha de destino não encontrada");
+  if (sourceImport.status !== "COMPLETED")
+    throw new AppError(409, "Somente importações concluídas podem ser reutilizadas");
+  if (sourceImport.campaignId === targetCampaign.id)
+    throw new AppError(409, "Esta importação já pertence à campanha selecionada");
+
+  const importedContacts = await prisma.contactImport.findMany({
+    where: { importId },
+    orderBy: { createdAt: "asc" },
+    select: {
+      contactId: true,
+      contact: { select: { customFields: true } },
+    },
+  });
+  if (!importedContacts.length)
+    throw new AppError(409, "Esta importação não possui contatos disponíveis");
+
+  let linked = 0;
+  for (let cursor = 0; cursor < importedContacts.length; cursor += 500) {
+    const batch = importedContacts.slice(cursor, cursor + 500);
+    const contactIds = batch.map((item) => item.contactId);
+    const [existing, sourceCampaignContacts] = await Promise.all([
+      prisma.campaignContact.findMany({
+        where: { campaignId: targetCampaign.id, contactId: { in: contactIds } },
+        select: { contactId: true },
+      }),
+      prisma.campaignContact.findMany({
+        where: {
+          campaignId: sourceImport.campaignId,
+          contactId: { in: contactIds },
+        },
+        select: { contactId: true, customFields: true },
+      }),
+    ]);
+    const existingIds = new Set(existing.map((item) => item.contactId));
+    const campaignFields = new Map(
+      sourceCampaignContacts.map((item) => [item.contactId, item.customFields]),
+    );
+    const newContacts = batch
+      .filter((item) => !existingIds.has(item.contactId))
+      .map((item) => ({
+        campaignId: targetCampaign.id,
+        contactId: item.contactId,
+        customFields: (campaignFields.get(item.contactId) ??
+          item.contact.customFields) as Prisma.InputJsonValue,
+      }));
+    if (!newContacts.length) continue;
+    const result = await prisma.campaignContact.createMany({
+      data: newContacts,
+      skipDuplicates: true,
+    });
+    linked += result.count;
+  }
+
+  const result = {
+    total: importedContacts.length,
+    linked,
+    alreadyLinked: importedContacts.length - linked,
+  };
+  await audit({
+    userId: req.user!.id,
+    action: "REUSE_IMPORT_IN_CAMPAIGN",
+    entity: "Import",
+    entityId: importId,
+    ip: req.ip,
+    metadata: {
+      sourceCampaignId: sourceImport.campaignId,
+      targetCampaignId: targetCampaign.id,
+      fileName: sourceImport.fileName,
+      ...result,
+    },
+  });
+  res.status(201).json(result);
+});
+
 importRoutes.delete("/:id", async (req, res) => {
   const id = z.string().min(1).parse(req.params.id);
   const item = await prisma.import.findFirst({

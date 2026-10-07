@@ -155,6 +155,22 @@ select:focus {
   border-radius: 8px;
   font-size: 13px;
 }
+.success-message {
+  padding: 12px 15px;
+  margin-bottom: 18px;
+  border: 1px solid #b9dfcc;
+  border-radius: 10px;
+  background: #edf9f2;
+  color: #116b49;
+  font-size: 14px;
+  font-weight: 600;
+}
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
 .shell {
   display: grid;
   grid-template-columns: 238px 1fr;
